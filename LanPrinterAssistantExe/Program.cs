@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
@@ -292,8 +293,41 @@ internal sealed class MainForm : Form
         banner.Controls.Add(new Label { Text = "发现、连接和共享局域网打印机", ForeColor = Color.FromArgb(205, 229, 245), AutoSize = true, Location = new Point(82, 43) });
         var version = typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
         var text = new Label { AutoSize = false, Location = new Point(28, 98), Size = new Size(464, 350), ForeColor = Color.FromArgb(45, 55, 65), Text = $"版本：{version}\r\n\r\n功能：\r\n• 检测本机局域网和共享打印机\r\n• 连接 Windows 共享打印机\r\n• 共享本机打印机并配置局域网权限\r\n• 提供连接前检查、自动修复和测试页\r\n\r\n隐私：程序只检测用户指定的局域网地址，不上传电脑名、IP 或打印机信息。\r\n\r\n© 2026 KiNG 版权所有\r\n创作者：KiNG    QQ：3148213528\r\n未经创作者书面许可，不得复制、修改、反编译、拆分、转售、转发或重新发布本软件及其衍生版本。\r\n商业使用、定制开发、批量授权或转载申请，请联系创作者。" };
+        var checkUpdate = new Button { Text = "检查更新", Location = new Point(295, 452), Size = new Size(105, 34) };
         var close = new Button { Text = "确定", DialogResult = DialogResult.OK, Location = new Point(410, 452), Size = new Size(82, 34) };
-        dialog.Controls.Add(banner); dialog.Controls.Add(text); dialog.Controls.Add(close); dialog.AcceptButton = close; dialog.ShowDialog(this);
+        checkUpdate.Click += async (_, _) => await CheckForUpdatesAsync(dialog, checkUpdate, version);
+        dialog.Controls.Add(banner); dialog.Controls.Add(text); dialog.Controls.Add(checkUpdate); dialog.Controls.Add(close); dialog.AcceptButton = close; dialog.ShowDialog(this);
+    }
+
+    static async Task CheckForUpdatesAsync(Form owner, Button button, string currentVersion)
+    {
+        const string apiUrl = "https://api.github.com/repos/KINGHY02/lan-printer-assistant/releases/latest";
+        const string releasePage = "https://github.com/KINGHY02/lan-printer-assistant/releases/latest";
+        button.Enabled = false; var originalText = button.Text; button.Text = "检查中…";
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("LanPrinterAssistant/1.0");
+            using var response = await client.GetAsync(apiUrl);
+            response.EnsureSuccessStatusCode();
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var tag = document.RootElement.GetProperty("tag_name").GetString()?.Trim() ?? "";
+            var normalized = tag.TrimStart('v', 'V');
+            if (!Version.TryParse(normalized, out var latest) || !Version.TryParse(currentVersion, out var current))
+                throw new InvalidOperationException("GitHub 返回的版本号格式无法识别。");
+            if (latest <= current)
+            {
+                MessageBox.Show(owner, $"当前已经是最新版本（v{current}）。", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var choice = MessageBox.Show(owner, $"发现新版本 v{latest}。\r\n是否打开 GitHub 下载页面？", "发现新版本", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (choice == DialogResult.Yes) Process.Start(new ProcessStartInfo(releasePage) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(owner, "检查更新失败。请检查网络连接，或稍后直接访问 GitHub Releases。\r\n\r\n" + ex.Message, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { button.Enabled = true; button.Text = originalText; }
     }
 
     Label AddLabel(string text, int x, int y) { var l = new Label { Text = text, AutoSize = true, Location = new Point(x, y), ForeColor = Color.FromArgb(45, 55, 65) }; Controls.Add(l); return l; }
