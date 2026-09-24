@@ -8,6 +8,12 @@ internal sealed class WindowsRepairService
     {
         using var key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\Microsoft\Windows NT\Printers\RPC");
         key!.SetValue("RpcUseNamedPipeProtocol", 1, RegistryValueKind.DWord);
+        // Compatibility for the common Windows shared-printer 0x0000011B
+        // failure after printer RPC hardening updates. This is intentionally
+        // applied on both the host and the client so ordinary users do not
+        // need to understand which side rejected the connection.
+        using var print = Registry.LocalMachine.CreateSubKey(@"SYSTEM\CurrentControlSet\Control\Print");
+        print!.SetValue("RpcAuthnLevelPrivacyEnabled", 0, RegistryValueKind.DWord);
     }
 
     public void RestartPrintSpooler() => NativePrinter.RestartSpooler();

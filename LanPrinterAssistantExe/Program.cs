@@ -472,7 +472,7 @@ internal sealed class MainForm : Form
         dialog.Controls.Add(new Label { Text = "选择本机打印机：", Location = new Point(25, 25), AutoSize = true }); dialog.Controls.Add(list); dialog.Controls.Add(new Label { Text = "共享名：", Location = new Point(25, 95), AutoSize = true }); dialog.Controls.Add(name); dialog.Controls.Add(guest); dialog.Controls.Add(everyone); dialog.Controls.Add(info); dialog.Controls.Add(enable); dialog.Controls.Add(unshare); dialog.Controls.Add(restoreGuest); dialog.Controls.Add(close);
         foreach (var printer in printerService.GetLocalPrinters()) list.Items.Add(printer);
         if (list.Items.Count > 0) { list.SelectedIndex = 0; name.Text = SuggestShareName(list.SelectedItem!.ToString()!); }
-        info.ForeColor = Color.DarkOrange; info.Text = "Guest 免密访问会降低局域网安全性。\r\nEveryone 打印权限允许局域网用户提交打印任务，但不会授予管理权限。\r\n如公司环境支持 Windows 账户认证，建议关闭 Guest。";
+        info.ForeColor = Color.DarkOrange; info.Text = "程序默认开启共享所需的兼容设置：Guest、Everyone 打印权限和 0x0000011B RPC 兼容项。\r\nGuest 和 RPC 兼容设置会降低局域网安全性，仅建议在可信办公网络使用。\r\n如公司环境支持 Windows 账户认证，建议关闭 Guest。";
         list.SelectedIndexChanged += (_, _) => { if (list.SelectedItem != null) name.Text = SuggestShareName(list.SelectedItem.ToString()!); };
         enable.Click += (_, _) =>
         {
@@ -482,14 +482,14 @@ internal sealed class MainForm : Form
                 var selected = list.SelectedItem.ToString()!; var shareName = name.Text.Trim();
                 if (!printerService.Share(selected, shareName)) throw new Win32Exception(Marshal.GetLastWin32Error(), "启用打印机共享失败。");
                 if (everyone.Checked && !printerService.GrantEveryonePrintPermission(selected)) throw new Win32Exception(Marshal.GetLastWin32Error(), "共享已建立，但写入 Everyone 打印权限失败。");
-                repairService.EnablePrinterSharingFirewall(); if (guest.Checked) repairService.EnableGuestAccess();
+                repairService.EnablePrinterSharingFirewall(); repairService.ConfigurePrintRpc(); repairService.RestartPrintSpooler(); if (guest.Checked) repairService.EnableGuestAccess();
                 var addresses = NativePrinter.LocalIpv4(); var computer = Environment.MachineName;
                 info.ForeColor = Color.DarkGreen; info.Text = "共享已启用。\r\n电脑名：" + computer + "\r\nIP 地址：" + string.Join(", ", addresses) + "\r\n共享路径：\\\\" + computer + "\\" + shareName + "\r\n\r\n请保持本电脑和打印机开机。";
             }
             catch (Exception ex) { info.ForeColor = Color.Red; info.Text = "启用失败：\r\n" + ex.Message; }
         };
         unshare.Click += (_, _) => { try { if (list.SelectedItem == null) throw new Exception("请选择打印机。"); if (!printerService.Unshare(list.SelectedItem.ToString()!)) throw new Win32Exception(Marshal.GetLastWin32Error(), "取消共享失败。"); info.ForeColor = Color.DarkGreen; info.Text = "已取消该打印机共享。"; } catch (Exception ex) { info.ForeColor = Color.Red; info.Text = "取消共享失败：\r\n" + ex.Message; } };
-        restoreGuest.Click += (_, _) => { try { repairService.RestoreGuestAccess(originalGuest); info.ForeColor = Color.DarkGreen; info.Text = "已恢复 Guest 设置。\r\n后续连接将需要 Windows 账户权限或公司网络允许的认证方式。"; } catch (Exception ex) { info.ForeColor = Color.Red; info.Text = "恢复 Guest 设置失败：\r\n" + ex.Message; } };
+        restoreGuest.Click += (_, _) => { try { repairService.RestoreGuestAccess(originalGuest); info.ForeColor = Color.DarkGreen; info.Text = "已关闭 Guest 免密访问。\r\nEveryone 打印权限和 RPC 兼容设置保持不变，已连接的电脑仍可继续打印。\r\n后续新连接将需要 Windows 账户权限或公司网络允许的认证方式。"; } catch (Exception ex) { info.ForeColor = Color.Red; info.Text = "关闭 Guest 失败：\r\n" + ex.Message; } };
         close.Click += (_, _) => dialog.Close(); dialog.ShowDialog(this);
     }
     void ConfigureAndInstall(string machine, string printer)
