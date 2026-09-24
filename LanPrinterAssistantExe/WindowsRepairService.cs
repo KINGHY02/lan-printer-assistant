@@ -8,6 +8,10 @@ internal sealed class WindowsRepairService
     {
         using var key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\Microsoft\Windows NT\Printers\RPC");
         key!.SetValue("RpcUseNamedPipeProtocol", 1, RegistryValueKind.DWord);
+        // Allow the spooler to listen over both named pipes and TCP. Windows
+        // 11 can otherwise report 0x00000BC4 (no printers were found) even
+        // when SMB and the printer share itself are reachable.
+        key.SetValue("RpcProtocols", 7, RegistryValueKind.DWord);
         // Compatibility for the common Windows shared-printer 0x0000011B
         // failure after printer RPC hardening updates. This is intentionally
         // applied on both the host and the client so ordinary users do not
