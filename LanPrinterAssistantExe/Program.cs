@@ -410,7 +410,13 @@ internal sealed class MainForm : Form
         var row = grid.SelectedRows[0];
         var address = row.Cells["IP"].Value?.ToString() ?? "";
         var names = row.Cells["Shares"].Value?.ToString() ?? "";
-        var selectedShare = string.IsNullOrWhiteSpace(names) ? "" : names.Split(';')[0].Trim();
+        var shareNames = names.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var selectedShare = shareNames.FirstOrDefault() ?? "";
+        if (shareNames.Length > 1)
+        {
+            selectedShare = ChooseSharedPrinter(shareNames) ?? selectedShare;
+            WriteLog($"{address} 检测到 {shareNames.Length} 台共享打印机，当前选择：{selectedShare}");
+        }
 
         // Update the controls immediately. Network name lookup must never block the UI thread.
         ip.Text = address;
@@ -438,6 +444,18 @@ internal sealed class MainForm : Form
         WriteLog($"已选择 {address}；电脑名={host.Text}；共享打印机={share.Text}");
     }
 
+    string? ChooseSharedPrinter(string[] names)
+    {
+        using var dialog = new Form { Text = "选择共享打印机", StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(430, 150), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font };
+        var list = new ComboBox { Location = new Point(20, 25), Size = new Size(390, 28), DropDownStyle = ComboBoxStyle.DropDownList };
+        list.Items.AddRange(names); list.SelectedIndex = 0;
+        var ok = new Button { Text = "选择", DialogResult = DialogResult.OK, Location = new Point(245, 90), Size = new Size(78, 32) };
+        var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(332, 90), Size = new Size(78, 32) };
+        dialog.Controls.Add(new Label { Text = "这台共享电脑提供了多台打印机，请选择要连接的打印机：", Location = new Point(20, 8), AutoSize = true });
+        dialog.Controls.Add(list); dialog.Controls.Add(ok); dialog.Controls.Add(cancel); dialog.AcceptButton = ok; dialog.CancelButton = cancel;
+        return dialog.ShowDialog(this) == DialogResult.OK ? list.SelectedItem?.ToString() : null;
+    }
+
     async Task ConnectPrinter()
     {
         try
@@ -463,6 +481,12 @@ internal sealed class MainForm : Form
             await Task.Run(() => ConfigureAndInstall(machine, printer)); status.Text = "状态：连接成功"; status.ForeColor = Color.Green; WriteLog("连接成功，驱动和端口已验证。"); MessageBox.Show("共享打印机连接成功。", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (TimeoutException) { status.Text = "状态：连接失败"; status.ForeColor = Color.Red; var message = "共享电脑响应超时。请确认电脑未休眠，并检查网络隔离或防火墙设置。"; WriteLog("连接失败：" + message); MessageBox.Show(message, "连接失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1722)
+        {
+            status.Text = "状态：连接失败"; status.ForeColor = Color.Red;
+            var message = "共享电脑的打印 RPC 服务没有响应（错误 1722）。\r\n\r\n请在共享者电脑重新打开本软件，分别对需要共享的每台打印机点击“启用共享”，并保持共享电脑未休眠。若只有某一台打印机失败，通常是该打印机的共享驱动或队列配置问题。";
+            WriteLog("连接失败：1722 RPC 服务器不可用；" + ex.Message); MessageBox.Show(message, "连接失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         catch (Exception ex) { status.Text = "状态：连接失败"; status.ForeColor = Color.Red; WriteLog("连接失败：" + ex.Message); MessageBox.Show(ex.Message, "连接失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         finally { Busy(false); }
     }
@@ -514,7 +538,12 @@ internal sealed class MainForm : Form
             {
                 if (list.SelectedItem == null || string.IsNullOrWhiteSpace(name.Text)) throw new Exception("请选择打印机并填写共享名。");
                 var selected = list.SelectedItem.ToString()!; var shareName = name.Text.Trim();
-                if (!printerService.Share(selected, shareName)) throw new Win32Exception(Marshal.GetLastWin32Error(), "启用打印机共享失败。");
+                if (!printerService.ShareWithWindowsFallback(selected, shareName, out var shareError))
+                {
+                    var code = shareError == 0 ? "未知" : $"{shareError} (0x{shareError:X8})";
+                    var detail = shareError == 5 ? "权限不足，请确认程序以管理员身份运行。" : "该打印机驱动可能不支持 Windows 共享，或打印后台处理服务拒绝了共享配置。";
+                    throw new Exception($"启用打印机共享失败。错误代码：{code}\r\n{detail}");
+                }
                 if (everyone.Checked && !printerService.GrantEveryonePrintPermission(selected)) throw new Win32Exception(Marshal.GetLastWin32Error(), "共享已建立，但写入 Everyone 打印权限失败。");
                 repairService.EnablePrinterSharingFirewall(); repairService.ConfigurePrintRpc(); repairService.RestartPrintSpooler(); if (guest.Checked) repairService.EnableGuestAccess();
                 var addresses = NativePrinter.LocalIpv4(); var computer = Environment.MachineName;
@@ -536,6 +565,7 @@ internal sealed class MainForm : Form
         {
             var codeText = $"{errorCode} (0x{errorCode:X8})";
             var systemMessage = errorCode == 0 ? "Windows 未返回具体错误码。" : new Win32Exception(errorCode).Message;
+            if (errorCode == 1722) throw new Win32Exception(errorCode, $"Windows 无法访问共享电脑的打印 RPC 服务（{codeText}）。");
             throw new Exception($"Windows 无法安装共享打印机。错误代码：{codeText}。\r\n系统提示：{systemMessage}\r\n\r\n请检查共享主机是否提供兼容驱动，或公司策略是否禁止自动安装共享打印机驱动。");
         }
         if (!printerService.Exists(unc)) throw new Exception("连接命令完成，但系统没有找到该打印机。");
